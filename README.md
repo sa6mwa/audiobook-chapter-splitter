@@ -31,8 +31,8 @@ usage: audiobook-chapter-splitter input.m4b output_directory
         Title. If empty, title tag from metadata or basename of input file will be used
 ```
 
-`mp3` files will be created under `output_directory` (directory at its
-parents will be created if it does not exist). The output filename
+`mp3` files will be created under `output_directory` (directory and
+its parents will be created if they do not exist). The output filename
 will be parsed into `FormatTitle - ChapterTitle.mp3` For example,
 Reinventing Organizations looks like this...
 
