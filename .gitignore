@@ -1,0 +1,10 @@
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+.\#*
+/bin
+/capslock.json
+/cover.out
+/cover.lcov
