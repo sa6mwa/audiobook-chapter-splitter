@@ -61,18 +61,24 @@ type Chapter struct {
 	} `json:"tags"`
 }
 
+func (c *Chapter) Chapter() string {
+	return fmt.Sprintf("%.04d", c.ID+1)
+}
+
 // GetMeta uses ffprobe to retrieve the chapter and format metadata
 // from inputFile (intended to be an m4b, but if ffmpeg/ffprobe
 // supports other formats with compatible output, the function should
-// work the same). Return a GetMetaOutput structure or error on
-// failure.
-func GetMeta(inputFile string) (*GetMetaOutput, error) {
+// work the same). activationBytes is intended for .aax input files
+// (m4b encoded audiobooks from Audible). Returns a GetMetaOutput
+// structure or error on failure.
+func GetMeta(inputFile string, activationBytes ...string) (*GetMetaOutput, error) {
 	c := []string{"/usr/bin/env",
-		"ffprobe", "-i", inputFile,
-		"-print_format", "json",
-		"-show_format",
-		"-show_chapters",
+		"ffprobe",
 	}
+	if len(activationBytes) > 0 && activationBytes[0] != "" {
+		c = append(c, "-activation_bytes", activationBytes[0])
+	}
+	c = append(c, "-i", inputFile, "-print_format", "json", "-show_format", "-show_chapters")
 
 	var ffprobe bytes.Buffer
 	mw := io.MultiWriter(os.Stdout, &ffprobe)
@@ -101,9 +107,12 @@ func GetMeta(inputFile string) (*GetMetaOutput, error) {
 // per chapter in meta.Chapters using lame(1). If title is non-empty
 // it will be used as the MP3 album tag and prefix of the output
 // file. If title is empty, meta.Format.Tags.Title will be used as MP3
-// album and filename prefix. Will loop over all chapters and return
-// an error immediately if something fails.
-func Encode(inputFile, outputDir, title string, meta *GetMetaOutput) error {
+// album and filename prefix. withChapterNumber will append a four
+// character long chapter number after the title. activationBytes is
+// intended for Audible .aax audiobooks and will append
+// -activation_bytes to the ffmpeg command. Will loop over all
+// chapters and return an error immediately if something fails.
+func Encode(inputFile, outputDir, title string, withChapterNumber bool, meta *GetMetaOutput, activationBytes ...string) error {
 	if meta == nil {
 		return errors.New("received nil meta")
 	}
@@ -128,16 +137,27 @@ func Encode(inputFile, outputDir, title string, meta *GetMetaOutput) error {
 	}
 
 	for _, chapter := range meta.Chapters {
-		newFile := title + " - " + chapter.Tags.Title + ".mp3"
+		var newFile string
+		if withChapterNumber {
+			newFile = title + " - " + chapter.Chapter() + " " + chapter.Tags.Title + ".mp3"
+		} else {
+			newFile = title + " - " + chapter.Tags.Title + ".mp3"
+		}
 
 		ffmpegCMD := []string{"/usr/bin/env",
-			"ffmpeg", "-i", inputFile,
+			"ffmpeg",
+		}
+		if len(activationBytes) > 0 && activationBytes[0] != "" {
+			ffmpegCMD = append(ffmpegCMD, "-activation_bytes", activationBytes[0])
+		}
+		ffmpegCMD = append(ffmpegCMD,
+			"-i", inputFile,
 			"-f", "wav",
 			"-c:a", "pcm_s16le",
 			"-ss", chapter.StartTime,
 			"-to", chapter.EndTime,
 			"pipe:",
-		}
+		)
 
 		lameCMD := []string{"/usr/bin/env",
 			"lame", "-b", "128",
@@ -181,12 +201,29 @@ func Encode(inputFile, outputDir, title string, meta *GetMetaOutput) error {
 			return fmt.Errorf("%s: %w", str(ffmpegCMD), err)
 		}
 
-		if err := ffmpeg.Wait(); err != nil {
-			return fmt.Errorf("%s: %w", str(ffmpegCMD), err)
-		}
+		var ffmpegErr = make(chan error)
+		var lameErr = make(chan error)
+		var goroutines int = 2
+		go func() {
+			ffmpegErr <- ffmpeg.Wait()
+		}()
+		go func() {
+			lameErr <- lame.Wait()
+		}()
 
-		if err := lame.Wait(); err != nil {
-			return fmt.Errorf("%s: %w", str(lameCMD), err)
+		for i := 0; i < goroutines; i++ {
+			select {
+			case err := <-ffmpegErr:
+				if err != nil {
+					lame.Process.Kill()
+					return fmt.Errorf("%s: %w", str(ffmpegCMD), err)
+				}
+			case err := <-lameErr:
+				if err != nil {
+					ffmpeg.Process.Kill()
+					return fmt.Errorf("%s: %w", str(lameCMD), err)
+				}
+			}
 		}
 	}
 
