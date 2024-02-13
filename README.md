@@ -5,7 +5,9 @@ into one mp3 per chapter using `ffprobe`, `ffmpeg` and `lame`. It
 should work with any `m4b` audiobook compatible with the `ffmpeg`
 suite, but the use-case was specifically the audio version of
 [Reinventing Organizations](https://www.reinventingorganizations.com/)
-by Frederic Laloux.
+by Frederic Laloux,
+[The Phoenix Project](https://itrevolution.com/product/the-phoenix-project/) 
+purchased from Audible and downloaded as a `.aax` and similarly [The Unicorn Project](https://itrevolution.com/product/the-unicorn-project/) by Gene Kim.
 
 ## Build
 
@@ -24,17 +26,21 @@ You should find the binary in the `bin` directory under `$(go env GOPATH)`.
 ## Usage
 
 ```console
-$ audiobook-chapter-splitter -h
-usage: audiobook-chapter-splitter input.m4b output_directory
+$ audiobook-chapter-splitter 
+usage: audiobook-chapter-splitter [flags] input.m4b output_directory
 
+  -a string
+        Audible activation bytes for .aax files
+  -c    Include chapter number in filename
   -t string
         Title. If empty, title tag from metadata or basename of input file will be used
 ```
 
 `mp3` files will be created under `output_directory` (directory and
 its parents will be created if they do not exist). The output filename
-will be parsed into `FormatTitle - ChapterTitle.mp3` For example,
-Reinventing Organizations looks like this...
+will be parsed into `Title - ChapterTitle.mp3` or `Title - 0001
+ChapterTitle.mp3` if using the `-c` option. For example, Reinventing
+Organizations looks like this...
 
 ```
 Reinventing Organizations - 001 - Introduction.mp3
@@ -74,6 +80,29 @@ Bitrate: 128KBps
 Frequency: 22KHz
 ```
 
+## AAX Audible to MP3s
+
+In order to convert a downloaded AAX Audiobook you have purchased from
+Audible, you need to resolve the `activation_bytes`. Once you have the
+`activation_bytes` for one of your purchased audiobooks, it can be used
+to recode all your purchased audiobooks. Use `rcrack` to recover the
+`activation_bytes`...
+
+```shell
+git clone --depth=1 https://github.com/inAudible-NG/tables rcrack-audible
+cd rcrack-audible
+chksum=$(ffprobe input.aax 2>&1 | grep -i 'checksum == .*' | cut -d' ' -f3)
+echo $chksum
+key=$(./rcrack . -h $chksum | grep -i 'hex:.*' | cut -d: -f2)
+echo "activation_bytes = $key"
+```
+
+Use the CLI to convert the `aax` into one `mp3` per chapter...
+
+```shell
+audiobook-chapter-splitter -a 1234deadbeef -t 'The Unicorn Project' -c unicorn-project.aax the-unicorn-project
+```
+
 ## fflame package
 
 The two functions in
@@ -84,15 +113,19 @@ in the main function and can be imported elsewhere, see `main.go` for usage exam
 // GetMeta uses ffprobe to retrieve the chapter and format metadata
 // from inputFile (intended to be an m4b, but if ffmpeg/ffprobe
 // supports other formats with compatible output, the function should
-// work the same). Return a GetMetaOutput structure or error on
-// failure.
-GetMeta(inputFile string) (*GetMetaOutput, error)
+// work the same). activationBytes is intended for .aax input files
+// (m4b encoded audiobooks from Audible). Returns a GetMetaOutput
+// structure or error on failure.
+GetMeta(inputFile string, activationBytes ...string) (*GetMetaOutput, error)
 
 // Encode encodes inputFile (m4b or similar if supported) into one mp3
 // per chapter in meta.Chapters using lame(1). If title is non-empty
 // it will be used as the MP3 album tag and prefix of the output
 // file. If title is empty, meta.Format.Tags.Title will be used as MP3
-// album and filename prefix. Will loop over all chapters and return
-// an error immediately if something fails.
-Encode(inputFile, outputDir, title string, meta *GetMetaOutput) error
+// album and filename prefix. withChapterNumber will append a four
+// character long chapter number after the title. activationBytes is
+// intended for Audible .aax audiobooks and will append
+// -activation_bytes to the ffmpeg command. Will loop over all
+// chapters and return an error immediately if something fails.
+Encode(inputFile, outputDir, title string, withChapterNumber bool, meta *GetMetaOutput, activationBytes ...string) error
 ```
